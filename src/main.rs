@@ -1,8 +1,13 @@
 use chrono::NaiveDate;
-use good_lp::{constraint, default_solver, variable, variables, Expression, Solution, SolverModel};
 use log::{debug, info};
+use lp_modeler::format::lp_format::LpFileFormat;
+use lp_modeler::{
+    constraint,
+    dsl::*,
+    solvers::{self, SolverTrait},
+};
 use maplit::hashmap;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 mod types;
 use crate::types::*;
@@ -110,10 +115,17 @@ fn main() {
                     .unwrap_or_else(|| panic!("Person not found: {}", name));
                 person.schedule_limit = limit;
             }
-            Task::Overlap { name, when } => {
+            Task::Overlap { name, mut when } => {
                 let person = persons
                     .get_mut(name)
                     .unwrap_or_else(|| panic!("Person not found: {}", name));
+                // Add the trivial 1-skill 'overlaps'.
+                for skill in person.skills.keys() {
+                    when.push(Overlap {
+                        combo: vec![skill],
+                        bonus: 1.0,
+                    });
+                }
                 person.overlap = when;
             }
             Task::Target { name, target } => {
@@ -142,156 +154,156 @@ fn simulate_day(persons: &mut HashMap<&str, Person>, date: NaiveDate) {
 }
 
 fn simulate_person(person: &mut Person) {
-    let mut vars = variables!();
-    let mut constraints = vec![];
-
-    // Define effective training times for each skill.
-    // These are basically the output of the solver.
-    let mut effective_training_time: HashMap<Skill, _> = hashmap! {};
-    for (skill, _) in &person.target {
-        let var = vars.add(variable().min(0.0));
-        effective_training_time.insert(skill, var);
+    // Define problem variables.
+    //
+    // Total return on investment, aka. skill-up points -- one per skill.
+    // This is the output.
+    let mut roi: HashMap<Skill, LpContinuous> = hashmap! {};
+    for skill in person.target.keys() {
+        let name = format!("ROI_{}", skill);
+        roi.insert(skill, LpContinuous::new(&name));
     }
 
-    // Define training time variables for each skill, for each segment.
-    // These represent literal time spent.
-    let mut training_time: HashMap<Segment, HashMap<Skill, _>> = hashmap! {};
-    // And total training time for each skill.
-    let mut total_training_time: HashMap<Skill, _> = hashmap! {};
-    for (segment, _) in &person.schedule {
-        // Define the total time used during this segment, too.
-        // This is the sum of all the training times.
-        let mut total_time = Expression::from(0.0);
-        let mut skill_vars: HashMap<Skill, _> = hashmap! {};
-        for (skill, _) in &person.skills {
-            let var = vars.add(variable().min(0.0));
-            skill_vars.insert(skill, var);
-            // Sum into per-segment total.
-            total_time += var;
-            // And per-skill total.
-            let ttt = total_training_time
-                .entry(skill)
-                .or_insert_with(|| Expression::from(0.0));
-            *ttt += var;
-        }
-        training_time.insert(segment, skill_vars);
-        // Constraint: Total time used during this segment must be less than or equal to the segment's length.
-        constraints.push(constraint!(total_time <= person.schedule[segment]));
+    // The time spent on each skill, by skill.
+    // This is used for the safety check.
+    let mut invested_skill: HashMap<Skill, LpContinuous> = hashmap! {};
+    for skill in person.target.keys() {
+        let name = format!("skill_{}", skill);
+        invested_skill.insert(skill, LpContinuous::new(&name));
     }
-    // Constraint: Total time spent on each skill must be less than or equal to the safety limit, where defined.
-    for (skill, limit) in &person.safety_limit {
-        if let Some(ttt) = total_training_time.get(skill) {
-            constraints.push(ttt.clone().leq(*limit));
+
+    // The time spent in each segment, by segment.
+    let mut invested_seg: HashMap<Segment, LpContinuous> = hashmap! {};
+    for seg in person.schedule.keys() {
+        let name = format!("segment_{}", seg);
+        invested_seg.insert(seg, LpContinuous::new(&name));
+    }
+
+    // The time spent on each skill *combo*, by segment and combo.
+    // This is needed to calculate the overlap bonus, and is the primary
+    // thing you can think of the solver as optimizing.
+    let mut invested_seg_combo: HashMap<(Segment, Vec<Skill>), LpContinuous> = hashmap! {};
+    for seg in person.schedule.keys() {
+        for combo in person.overlap.iter() {
+            let name = format!("combo_{}_{}", seg, combo.combo.join("_"));
+            invested_seg_combo.insert((seg, combo.combo.clone()), LpContinuous::new(&name));
         }
     }
 
-    // Define the "overlapped" training times.
-    // Each skill comes in a non-overlapped version, and may also come in overlapped versions
-    // if the Person has a defined bonus for that combination.
-    //
-    // To map this up to training time and effective training time, we get two distinct sets
-    // of constraints:
-    //
-    // 1. The training time for a skill is equal to the sum of the overlapped training times for that skill,
-    //    except that each overlapped training time is divided by the number of skills in the combination.
-    //
-    // 2. The effective training time for a skill is equal to the sum of the overlapped training times for that skill,
-    //    where each overlapped training time is multiplied by the bonus for that combination and divided by
-    //    the number of skills in the combination.
-    //
-    // All of this is done per-segment.
-    let mut overlapped_training_time: HashMap<String, HashMap<String, _>> = hashmap! {};
-    // The 'skill' here can be either the pure skill name, or a combination of skills separated with underscores.
-    for (segment, _) in &person.schedule {
-        let mut segment_overlapped_training_time: HashMap<String, _> = hashmap! {};
-        for (skill, _) in &person.target {
-            let var = vars.add(variable().min(0.0));
-            segment_overlapped_training_time.insert(skill.to_string(), var);
-        }
-        for overlap in &person.overlap {
-            let name = overlap.combo.join("_");
-            let var = vars.add(variable().min(0.0));
-            segment_overlapped_training_time.insert(name, var);
-        }
-        overlapped_training_time.insert(segment.to_string(), segment_overlapped_training_time);
+    // Define objective function: maximize the total return on investment.
+    let mut problem = LpProblem::new(person.name, LpObjective::Maximize);
+    for var in roi.values() {
+        problem += var;
     }
-    // Define training time constraints:
-    for (segment, _) in &person.schedule {
-        for (skill, _) in &person.target {
-            let mut total_overlapped_time =
-                Expression::from(overlapped_training_time[*segment][*skill]);
-            for overlap in &person.overlap {
-                if overlap.combo.contains(skill) {
-                    let name = overlap.combo.join("_");
-                    total_overlapped_time +=
-                        overlapped_training_time[*segment][&name] / overlap.combo.len() as f64;
-                }
+
+    // Define constraints.
+    // 1. Spent time cannot be negative, for any segment/combo or skill.
+    for var in invested_skill
+        .values()
+        .chain(invested_seg.values())
+        .chain(invested_seg_combo.values())
+    {
+        problem += constraint!(var >= 0.0);
+    }
+    // 2. Time spent from a segment must be less than the segment limit.
+    for (seg, limit) in person.schedule.iter() {
+        let var = invested_seg.get(seg).unwrap();
+        problem += constraint!(var <= limit);
+    }
+    // 3. Time spent on a skill must be less than the skill's safety limit, if any.
+    for (skill, limit) in person.safety_limit.iter() {
+        if let Some(var) = invested_skill.get(skill) {
+            problem += constraint!(var <= limit);
+        }
+    }
+    // 4. Time spent on a skill equals the sum of time spent on each combo that includes it.
+    for (skill, total) in invested_skill.iter() {
+        // Subtract from the total all the time spent on combos that include this skill,
+        // and we should get zero.
+        let mut antisum = LpExpression::from(total);
+        for ((_, combo), var) in invested_seg_combo.iter() {
+            if combo.contains(skill) {
+                antisum -= var;
             }
-            // 1. The training time for a skill is equal to the sum of the overlapped training times for that skill,
-            constraints.push(total_overlapped_time.eq(total_training_time[skill].clone()));
         }
+        problem += antisum.equal(0.0);
     }
-    // Define effective training time constraints:
-    for (segment, _) in &person.schedule {
-        for (skill, _) in &person.target {
-            let mut total_effective_overlapped_time =
-                Expression::from(overlapped_training_time[*segment][*skill]);
-            for overlap in &person.overlap {
-                if overlap.combo.contains(skill) {
-                    let name = overlap.combo.join("_");
-                    total_effective_overlapped_time += overlapped_training_time[*segment][&name]
-                        / overlap.combo.len() as f64
-                        * overlap.bonus;
-                }
+    // 5. Time spent in a segment equals the sum of time spent on each combo in it...
+    //    multiplied by the size of the combo.
+    for (seg, total) in invested_seg.iter() {
+        // Same trick as above.
+        let mut antisum = LpExpression::from(total);
+        for ((c_seg, combo), var) in invested_seg_combo.iter() {
+            if c_seg == seg {
+                antisum -= var * combo.len() as f32;
             }
-            // 2. The effective training time for a skill is equal to the sum of the overlapped training times for that skill,
-            constraints.push(constraint!(
-                effective_training_time[skill] == total_effective_overlapped_time
-            ));
         }
+        problem += antisum.equal(0.0);
     }
-
-    // Define the objective variable: Maximize effective training time.
-    let mut total_effective_training_time = Expression::from(0.0);
-    for (_, var) in &effective_training_time {
-        total_effective_training_time += var;
+    // 6. Return on investment equals the sum of time spent on each combo that includes it,
+    //    multiplied by the bonus for that combo.
+    for (skill, total) in roi.iter() {
+        // Same trick as above.
+        let mut antisum = LpExpression::from(total);
+        for ((_, combo), var) in invested_seg_combo.iter() {
+            if combo.contains(skill) {
+                // Yeah yeah, this is a bit inefficient, but it's not a big deal.
+                let bonus = person
+                    .overlap
+                    .iter()
+                    .find(|o| o.combo == *combo)
+                    .unwrap()
+                    .bonus;
+                antisum -= var * bonus;
+            }
+        }
+        problem += antisum.equal(0.0);
     }
-
-    // And solve! Finally.
-    let mut solution = vars
-        .maximise(total_effective_training_time)
-        .using(good_lp::default_solver);
-    for constraint in constraints {
-        solution = solution.with(constraint);
-    }
-    let result = solution.solve().expect("Expected *some* sort of solution!");
-
-    // Print each and every variable, for debugging.
-    for (skill, eff) in &effective_training_time {
-        info!(
-            "Skill: {}, Effective Training Time: {}",
-            skill,
-            result.value(*eff)
+    // 7. For segments that have limitations on what skills can be trained,
+    //   the time spent on every combo must be zero EXCEPT if it only contains
+    //   permitted skills.
+    for (seg, allowed) in person.schedule_limit.iter() {
+        println!(
+            "Checking segment {:?} with allowed skills {:?}",
+            seg, allowed
         );
-    }
-    for (segment, skills) in &training_time {
-        for (skill, time) in skills {
-            info!(
-                "Segment: {}; {}, Time: {}",
-                segment,
-                skill,
-                result.value(*time)
-            );
+        let allowed: HashSet<Skill> = allowed.iter().cloned().collect();
+        for ((c_seg, combo), var) in invested_seg_combo.iter() {
+            if c_seg == seg {
+                let combo_set: HashSet<Skill> = combo.iter().cloned().collect();
+                // println!("  Checking combo {:?}", combo_set);
+                if !allowed.is_superset(&combo_set) {
+                    println!("  Adding constraint: {:?} is not allowed.", combo_set);
+                    problem += var.equal(0.0);
+                }
+            }
         }
     }
-    for (segment, skills) in &overlapped_training_time {
-        for (skill, time) in skills {
-            info!(
-                "Combo: {}; {}, Time: {}",
-                segment,
-                skill,
-                result.value(*time)
-            );
-        }
+
+    // Solve the problem.
+    let solver = solvers::MiniLpSolver::new();
+    let solution = solver
+        .run(&problem)
+        .expect("Failed to find a training schedule.");
+    println!("Solution: {:?}", solution);
+
+    problem.write_lp("/dev/stdout").unwrap();
+
+    // Print the results...
+    println!("Total RoI:");
+    for (skill, var) in roi.iter() {
+        println!("  {}: {}", skill, solution.get_float(var));
+    }
+    println!("Time spent on skills:");
+    for (skill, var) in invested_skill.iter() {
+        println!("  {}: {}", skill, solution.get_float(var));
+    }
+    println!("Time spent on segments:");
+    for (seg, var) in invested_seg.iter() {
+        println!("  {}: {}", seg, solution.get_float(var));
+    }
+    println!("Time spent on combos:");
+    for ((seg, combo), var) in invested_seg_combo.iter() {
+        println!("  {} {}: {}", seg, combo.join("_"), solution.get_float(var));
     }
 }
