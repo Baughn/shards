@@ -64,7 +64,7 @@ pub struct Person {
     // This *includes* the trivial case of training a single skill.
     pub overlap: Vec<Overlap>,
     // Target values for any skill being trained.
-    pub target: BTreeMap<Skill, f32>,
+    pub target: BTreeMap<Skill, Target>,
     // Skill prefereces for training; defines which skills are trained first,
     // and by how much they're preferred. 1.0 is neutral; lower is less.
     // A skill's presence in this map does not imply the person is even capable
@@ -99,4 +99,10 @@ impl Person {
 pub struct Overlap {
     pub combo: Vec<Skill>,
     pub bonus: f32,
+}
+
+#[derive(Debug)]
+pub struct Target {
+    pub target_ranks: f32,
+    pub hours_needed: f32,
 }

@@ -1,4 +1,5 @@
 use chrono::NaiveDate;
+use lazy_static::lazy_static;
 use log::{debug, info};
 use lp_modeler::format::lp_format::LpFileFormat;
 use lp_modeler::{
@@ -6,11 +7,34 @@ use lp_modeler::{
     dsl::*,
     solvers::{self, SolverTrait},
 };
-use maplit::btreemap;
+use maplit::{btreemap, btreeset};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod types;
 use crate::types::*;
+
+lazy_static! {
+    static ref ATTRIBUTES: BTreeSet<Skill> = btreeset! {
+        "Strength", "Dexterity", "Stamina",
+        "Charisma", "Manipulation", "Appearance",
+        "Perception", "Intelligence", "Wits",
+    };
+    static ref ABILITIES: BTreeSet<Skill> = btreeset! {
+        "Archery", "Athletics", "Awareness",
+        "Brawl", "Bureaucracy", "Craft",
+        "Dodge", "Integrity", "Investigation",
+        "Larceny", "Linguistics", "Lore",
+        "Martial Arts", "Medicine", "Melee",
+        "Occult", "Performance", "Presence",
+        "Resistance", "Ride", "Sail",
+        "Socialize", "Stealth", "Survival",
+        "Thrown", "War",
+        "Firearms", "Driving",
+    };
+    static ref PSIONICS: BTreeSet<Skill> = btreeset! {
+        "Dreamwalking", "Illusion",
+    };
+}
 
 fn main() {
     env_logger::init();
@@ -98,27 +122,16 @@ fn main() {
                 persons.insert(name, Person::new(name, skills));
             }
             Task::Schedule { name, segment } => {
-                let person = persons
-                    .get_mut(name)
-                    .unwrap_or_else(|| panic!("Person not found: {}", name));
-                person.schedule = segment;
+                persons.get_mut(name).unwrap().schedule = segment;
             }
             Task::SafetyLimit { name, limit } => {
-                let person = persons
-                    .get_mut(name)
-                    .unwrap_or_else(|| panic!("Person not found: {}", name));
-                person.safety_limit = limit;
+                persons.get_mut(name).unwrap().safety_limit = limit;
             }
             Task::ScheduleLimit { name, limit } => {
-                let person = persons
-                    .get_mut(name)
-                    .unwrap_or_else(|| panic!("Person not found: {}", name));
-                person.schedule_limit = limit;
+                persons.get_mut(name).unwrap().schedule_limit = limit;
             }
             Task::Overlap { name, mut when } => {
-                let person = persons
-                    .get_mut(name)
-                    .unwrap_or_else(|| panic!("Person not found: {}", name));
+                let person = persons.get_mut(name).unwrap();
                 // Add the trivial 1-skill 'overlaps'.
                 for skill in person.skills.keys() {
                     when.push(Overlap {
@@ -129,10 +142,21 @@ fn main() {
                 person.overlap = when;
             }
             Task::Target { name, target } => {
-                let person = persons
-                    .get_mut(name)
-                    .unwrap_or_else(|| panic!("Person not found: {}", name));
-                person.target = target;
+                let person = persons.get_mut(name).unwrap();
+                let mut new_targets = btreemap! {};
+                for (skill, target_ranks) in target {
+                    new_targets.insert(
+                        skill,
+                        Target {
+                            target_ranks,
+                            hours_needed: effective_training_hours_needed(
+                                skill,
+                                person.skills[skill],
+                            ),
+                        },
+                    );
+                }
+                person.target = new_targets;
             }
         }
     }
@@ -320,4 +344,33 @@ fn simulate_person(person: &Person) -> BTreeMap<Skill, f32> {
         results.insert(*skill, solution.get_float(var));
     }
     results
+}
+
+// Computes the number of effective training hours needed to reach a target rank.
+// This depends on the type of skill and the current rank.
+fn effective_training_hours_needed(skill: &str, current_rank: f32) -> f32 {
+    const HOURS_PER_WEEK: f32 = 48.0;
+    const WEEKS_PER_MONTH: f32 = 4.0;
+    let current_rank = current_rank.floor();
+    if current_rank <= 0.0 {
+        return if ATTRIBUTES.contains(skill) {
+            3.0 * HOURS_PER_WEEK * WEEKS_PER_MONTH
+        } else if ABILITIES.contains(skill) {
+            3.0 * HOURS_PER_WEEK
+        } else if PSIONICS.contains(skill) {
+            2.0 * HOURS_PER_WEEK
+        } else {
+            panic!("Unknown skill type: {}", skill);
+        };
+    } else {
+        return if ATTRIBUTES.contains(skill) {
+            current_rank * HOURS_PER_WEEK * WEEKS_PER_MONTH
+        } else if ABILITIES.contains(skill) {
+            current_rank * HOURS_PER_WEEK
+        } else if PSIONICS.contains(skill) {
+            current_rank * HOURS_PER_WEEK
+        } else {
+            panic!("Unknown skill type: {}", skill);
+        };
+    }
 }
