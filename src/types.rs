@@ -1,7 +1,5 @@
 use std::collections::BTreeMap;
 
-use log::debug;
-
 pub type Name = &'static str;
 pub type Skill = &'static str;
 pub type Segment = &'static str;

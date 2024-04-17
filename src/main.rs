@@ -1,7 +1,6 @@
 use chrono::NaiveDate;
 use lazy_static::lazy_static;
 use log::{debug, info};
-use lp_modeler::format::lp_format::LpFileFormat;
 use lp_modeler::{
     constraint,
     dsl::*,
@@ -40,6 +39,7 @@ fn main() {
     env_logger::init();
 
     let start = NaiveDate::from_ymd_opt(2009, 09, 01).unwrap();
+    println!("{}: Time begins", start);
     let schedule: Vec<Task> = vec![
         Task::Baseline {
             name: "Amu",
@@ -165,7 +165,6 @@ fn main() {
     while persons.iter().any(|(_, person)| person.target.len() > 0) {
         simulate_day(&mut persons, now);
         now = now.succ_opt().unwrap();
-        return;
     }
     info!("Simulation complete.");
 }
@@ -173,7 +172,17 @@ fn main() {
 fn simulate_day(persons: &mut BTreeMap<&str, Person>, date: NaiveDate) {
     info!("Date: {}", date);
     for (_, person) in persons.iter_mut() {
-        simulate_person(person);
+        let increment = simulate_person(person);
+        for (skill, effective_hours_trained) in increment {
+            person.target.get_mut(skill).unwrap().hours_needed -= effective_hours_trained;
+            if person.target[skill].hours_needed <= 0.0 {
+                println!(
+                    "{}: {} has reached target rank of {} for {}",
+                    date, person.name, person.skills[skill], skill
+                );
+                person.target.remove(skill);
+            }
+        }
     }
 }
 
@@ -304,6 +313,10 @@ fn simulate_person(person: &Person) -> BTreeMap<Skill, f32> {
             }
         }
     }
+    // 8. In any event, don't put in more time than is needed.
+    for (skill, target) in person.target.iter() {
+        problem += constraint!(roi[skill] <= target.hours_needed);
+    }
 
     // Solve the problem.
     let solver = solvers::MiniLpSolver::new();
@@ -314,29 +327,29 @@ fn simulate_person(person: &Person) -> BTreeMap<Skill, f32> {
 
     // problem.write_lp("/dev/stdout").unwrap();
 
-    // Print the results...
-    println!("Total RoI:");
-    let mut total = 0.0;
-    for (skill, var) in roi.iter() {
-        println!("  {}: {}", skill, solution.get_float(var));
-        total += solution.get_float(var);
-    }
-    println!("  Total: {}", total);
-    println!("Time spent on skills:");
-    for (skill, var) in invested_skill.iter() {
-        println!("  {}: {}", skill, solution.get_float(var));
-    }
-    println!("Time spent on segments:");
-    for (seg, var) in invested_seg.iter() {
-        println!("  {}: {}", seg, solution.get_float(var));
-    }
-    println!("Time spent on combos:");
-    for ((seg, combo), var) in invested_seg_combo.iter() {
-        let value = solution.get_float(var);
-        if value != 0.0 {
-            println!("  {} {}: {}", seg, combo.join("_"), value);
-        }
-    }
+    // // Print the results...
+    // println!("Total RoI:");
+    // let mut total = 0.0;
+    // for (skill, var) in roi.iter() {
+    //     println!("  {}: {}", skill, solution.get_float(var));
+    //     total += solution.get_float(var);
+    // }
+    // println!("  Total: {}", total);
+    // println!("Time spent on skills:");
+    // for (skill, var) in invested_skill.iter() {
+    //     println!("  {}: {}", skill, solution.get_float(var));
+    // }
+    // println!("Time spent on segments:");
+    // for (seg, var) in invested_seg.iter() {
+    //     println!("  {}: {}", seg, solution.get_float(var));
+    // }
+    // println!("Time spent on combos:");
+    // for ((seg, combo), var) in invested_seg_combo.iter() {
+    //     let value = solution.get_float(var);
+    //     if value != 0.0 {
+    //         println!("  {} {}: {}", seg, combo.join("_"), value);
+    //     }
+    // }
 
     // Return the results.
     let mut results = BTreeMap::new();
