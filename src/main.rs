@@ -6,8 +6,8 @@ use lp_modeler::{
     dsl::*,
     solvers::{self, SolverTrait},
 };
-use maplit::hashmap;
-use std::collections::{HashMap, HashSet};
+use maplit::btreemap;
+use std::collections::{BTreeMap, BTreeSet};
 
 mod types;
 use crate::types::*;
@@ -19,7 +19,7 @@ fn main() {
     let schedule: Vec<Task> = vec![
         Task::Baseline {
             name: "Amu",
-            skills: hashmap! {
+            skills: btreemap! {
                 "Dreamwalking" => 1.0,
                 "Illusion" => 1.0,
                 "Integrity" => 2.0,
@@ -28,7 +28,7 @@ fn main() {
         },
         Task::Schedule {
             name: "Amu",
-            segment: hashmap! {
+            segment: btreemap! {
                 "School" => 1.0,
                 "Afternoon" => 2.0,
                 "Evening" => 1.0,
@@ -37,13 +37,13 @@ fn main() {
         },
         Task::SafetyLimit {
             name: "Amu",
-            limit: hashmap! {
+            limit: btreemap! {
                 "Integrity" => 2.0,
             },
         },
         Task::ScheduleLimit {
             name: "Amu",
-            limit: hashmap! {
+            limit: btreemap! {
                 "School" => vec!["Illusion", "Lore"],
                 "Sleep" => vec!["Dreamwalking", "Integrity"],
             },
@@ -67,7 +67,7 @@ fn main() {
         },
         Task::Target {
             name: "Amu",
-            target: hashmap! {
+            target: btreemap! {
                 "Dreamwalking" => 2.0,
                 "Illusion" => 2.0,
                 "Integrity" => 3.0,
@@ -79,7 +79,7 @@ fn main() {
     // Run the schedule.
     log::debug!("Schedule: {:?}", schedule);
     let mut now = start;
-    let mut persons: HashMap<&str, Person> = hashmap! {};
+    let mut persons: BTreeMap<&str, Person> = btreemap! {};
     for task in schedule {
         match task {
             Task::At { date } => {
@@ -146,7 +146,7 @@ fn main() {
     info!("Simulation complete.");
 }
 
-fn simulate_day(persons: &mut HashMap<&str, Person>, date: NaiveDate) {
+fn simulate_day(persons: &mut BTreeMap<&str, Person>, date: NaiveDate) {
     info!("Date: {}", date);
     for (_, person) in persons.iter_mut() {
         simulate_person(person);
@@ -154,12 +154,12 @@ fn simulate_day(persons: &mut HashMap<&str, Person>, date: NaiveDate) {
 }
 
 // Returns effective training hours for the day.
-fn simulate_person(person: &Person) -> HashMap<Skill, f32> {
+fn simulate_person(person: &Person) -> BTreeMap<Skill, f32> {
     // Define problem variables.
     //
     // Total return on investment, aka. skill-up points -- one per skill.
     // This is the output.
-    let mut roi: HashMap<Skill, LpContinuous> = hashmap! {};
+    let mut roi: BTreeMap<Skill, LpContinuous> = btreemap! {};
     for skill in person.target.keys() {
         let name = format!("ROI_{}", skill);
         roi.insert(skill, LpContinuous::new(&name));
@@ -167,14 +167,14 @@ fn simulate_person(person: &Person) -> HashMap<Skill, f32> {
 
     // The time spent on each skill, by skill.
     // This is used for the safety check.
-    let mut invested_skill: HashMap<Skill, LpContinuous> = hashmap! {};
+    let mut invested_skill: BTreeMap<Skill, LpContinuous> = btreemap! {};
     for skill in person.target.keys() {
         let name = format!("skill_{}", skill);
         invested_skill.insert(skill, LpContinuous::new(&name));
     }
 
     // The time spent in each segment, by segment.
-    let mut invested_seg: HashMap<Segment, LpContinuous> = hashmap! {};
+    let mut invested_seg: BTreeMap<Segment, LpContinuous> = btreemap! {};
     for seg in person.schedule.keys() {
         let name = format!("segment_{}", seg);
         invested_seg.insert(seg, LpContinuous::new(&name));
@@ -183,7 +183,7 @@ fn simulate_person(person: &Person) -> HashMap<Skill, f32> {
     // The time spent on each skill *combo*, by segment and combo.
     // This is needed to calculate the overlap bonus, and is the primary
     // thing you can think of the solver as optimizing.
-    let mut invested_seg_combo: HashMap<(Segment, Vec<Skill>), LpContinuous> = hashmap! {};
+    let mut invested_seg_combo: BTreeMap<(Segment, Vec<Skill>), LpContinuous> = btreemap! {};
     for seg in person.schedule.keys() {
         for combo in person.overlap.iter() {
             let name = format!("combo_{}_{}", seg, combo.combo.join("_"));
@@ -193,8 +193,8 @@ fn simulate_person(person: &Person) -> HashMap<Skill, f32> {
 
     // Define objective function: maximize the total return on investment.
     let mut problem = LpProblem::new(person.name, LpObjective::Maximize);
-    for var in roi.values() {
-        problem += var;
+    for (skill, var) in roi.iter() {
+        problem += var * person.preference[skill];
     }
 
     // Define constraints.
@@ -268,10 +268,10 @@ fn simulate_person(person: &Person) -> HashMap<Skill, f32> {
             "Checking segment {:?} with allowed skills {:?}",
             seg, allowed
         );
-        let allowed: HashSet<Skill> = allowed.iter().cloned().collect();
+        let allowed: BTreeSet<Skill> = allowed.iter().cloned().collect();
         for ((c_seg, combo), var) in invested_seg_combo.iter() {
             if c_seg == seg {
-                let combo_set: HashSet<Skill> = combo.iter().cloned().collect();
+                let combo_set: BTreeSet<Skill> = combo.iter().cloned().collect();
                 // println!("  Checking combo {:?}", combo_set);
                 if !allowed.is_superset(&combo_set) {
                     debug!("  Adding constraint: {:?} is not allowed.", combo_set);
@@ -315,7 +315,7 @@ fn simulate_person(person: &Person) -> HashMap<Skill, f32> {
     }
 
     // Return the results.
-    let mut results = HashMap::new();
+    let mut results = BTreeMap::new();
     for (skill, var) in roi.iter() {
         results.insert(*skill, solution.get_float(var));
     }

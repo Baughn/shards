@@ -1,8 +1,15 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
+
+use log::debug;
 
 pub type Name = &'static str;
 pub type Skill = &'static str;
 pub type Segment = &'static str;
+
+// This is required to give deterministic results.
+const DEFAULT_PRIORITY_ORDER: &[Skill] = &["Integrity", "Dreamwalking", "Illusion", "Lore"];
+// The low offset value ensures overlap bonuses aren't ignored.
+const DEFAULT_PRIORITY_OFFSET: f32 = 0.000001;
 
 // A character is, really, just the sum of their tasks.
 // Sometimes we want to replace their components, which is done implicitly
@@ -17,19 +24,19 @@ pub enum Task {
     },
     Baseline {
         name: Name,
-        skills: HashMap<Skill, f32>,
+        skills: BTreeMap<Skill, f32>,
     },
     Schedule {
         name: Name,
-        segment: HashMap<Segment, f32>,
+        segment: BTreeMap<Segment, f32>,
     },
     SafetyLimit {
         name: Name,
-        limit: HashMap<Skill, f32>,
+        limit: BTreeMap<Skill, f32>,
     },
     ScheduleLimit {
         name: Name,
-        limit: HashMap<Segment, Vec<Skill>>,
+        limit: BTreeMap<Segment, Vec<Skill>>,
     },
     Overlap {
         name: Name,
@@ -37,7 +44,7 @@ pub enum Task {
     },
     Target {
         name: Name,
-        target: HashMap<Skill, f32>,
+        target: BTreeMap<Skill, f32>,
     },
 }
 
@@ -45,30 +52,45 @@ pub enum Task {
 pub struct Person {
     pub name: Name,
     // This person's skills, training or not.
-    pub skills: HashMap<Skill, f32>,
+    pub skills: BTreeMap<Skill, f32>,
     // This person's schedule, in terms of segments and their duration.
-    pub schedule: HashMap<Segment, f32>,
+    pub schedule: BTreeMap<Segment, f32>,
     // Limits to how much some skills can be trained per day.
-    pub safety_limit: HashMap<Skill, f32>,
+    pub safety_limit: BTreeMap<Skill, f32>,
     // Limits to which skills can be trained in which segments.
     // Some segments have no limit, and are not listed here.
-    pub schedule_limit: HashMap<Segment, Vec<Skill>>,
+    pub schedule_limit: BTreeMap<Segment, Vec<Skill>>,
     // Overlap bonuses for training multiple skills at once.
     // This *includes* the trivial case of training a single skill.
     pub overlap: Vec<Overlap>,
-    pub target: HashMap<Skill, f32>,
+    // Target values for any skill being trained.
+    pub target: BTreeMap<Skill, f32>,
+    // Skill prefereces for training; defines which skills are trained first,
+    // and by how much they're preferred. 1.0 is neutral; lower is less.
+    // A skill's presence in this map does not imply the person is even capable
+    // of training it.
+    pub preference: BTreeMap<Skill, f32>,
 }
 
 impl Person {
-    pub fn new(name: Name, skills: HashMap<Skill, f32>) -> Self {
+    pub fn new(name: Name, skills: BTreeMap<Skill, f32>) -> Self {
+        // Generate a default preference map.
+        // We start at 1.0, then just add the offset per-skill.
+        let preference = DEFAULT_PRIORITY_ORDER
+            .iter()
+            .enumerate()
+            .map(|(i, skill)| (*skill, 1.0 + i as f32 * DEFAULT_PRIORITY_OFFSET))
+            .collect();
+
         Self {
             name,
             skills,
-            schedule: HashMap::new(),
-            safety_limit: HashMap::new(),
-            schedule_limit: HashMap::new(),
+            schedule: BTreeMap::new(),
+            safety_limit: BTreeMap::new(),
+            schedule_limit: BTreeMap::new(),
             overlap: vec![],
-            target: HashMap::new(),
+            target: BTreeMap::new(),
+            preference,
         }
     }
 }
