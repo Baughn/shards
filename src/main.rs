@@ -153,7 +153,8 @@ fn simulate_day(persons: &mut HashMap<&str, Person>, date: NaiveDate) {
     }
 }
 
-fn simulate_person(person: &mut Person) {
+// Returns effective training hours for the day.
+fn simulate_person(person: &Person) -> HashMap<Skill, f32> {
     // Define problem variables.
     //
     // Total return on investment, aka. skill-up points -- one per skill.
@@ -263,7 +264,7 @@ fn simulate_person(person: &mut Person) {
     //   the time spent on every combo must be zero EXCEPT if it only contains
     //   permitted skills.
     for (seg, allowed) in person.schedule_limit.iter() {
-        println!(
+        debug!(
             "Checking segment {:?} with allowed skills {:?}",
             seg, allowed
         );
@@ -273,7 +274,7 @@ fn simulate_person(person: &mut Person) {
                 let combo_set: HashSet<Skill> = combo.iter().cloned().collect();
                 // println!("  Checking combo {:?}", combo_set);
                 if !allowed.is_superset(&combo_set) {
-                    println!("  Adding constraint: {:?} is not allowed.", combo_set);
+                    debug!("  Adding constraint: {:?} is not allowed.", combo_set);
                     problem += var.equal(0.0);
                 }
             }
@@ -285,15 +286,18 @@ fn simulate_person(person: &mut Person) {
     let solution = solver
         .run(&problem)
         .expect("Failed to find a training schedule.");
-    println!("Solution: {:?}", solution);
+    debug!("Solution: {:?}", solution);
 
-    problem.write_lp("/dev/stdout").unwrap();
+    // problem.write_lp("/dev/stdout").unwrap();
 
     // Print the results...
     println!("Total RoI:");
+    let mut total = 0.0;
     for (skill, var) in roi.iter() {
         println!("  {}: {}", skill, solution.get_float(var));
+        total += solution.get_float(var);
     }
+    println!("  Total: {}", total);
     println!("Time spent on skills:");
     for (skill, var) in invested_skill.iter() {
         println!("  {}: {}", skill, solution.get_float(var));
@@ -304,6 +308,16 @@ fn simulate_person(person: &mut Person) {
     }
     println!("Time spent on combos:");
     for ((seg, combo), var) in invested_seg_combo.iter() {
-        println!("  {} {}: {}", seg, combo.join("_"), solution.get_float(var));
+        let value = solution.get_float(var);
+        if value != 0.0 {
+            println!("  {} {}: {}", seg, combo.join("_"), value);
+        }
     }
+
+    // Return the results.
+    let mut results = HashMap::new();
+    for (skill, var) in roi.iter() {
+        results.insert(*skill, solution.get_float(var));
+    }
+    results
 }
