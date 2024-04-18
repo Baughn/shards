@@ -162,32 +162,39 @@ fn main() {
     }
     // At the end of the schedule.
     // Run the simulator until no-one has any skill-up targets left.
+    let mut sum_roi = 0.0;
+    let mut days = 0;
     while persons.iter().any(|(_, person)| person.target.len() > 0) {
-        simulate_day(&mut persons, now);
+        sum_roi += simulate_day(&mut persons, now);
+        days += 1;
         now = now.succ_opt().unwrap();
     }
+    println!("Total ROI: {}, ROI/day: {}", sum_roi, sum_roi / days as f32);
     info!("Simulation complete.");
 }
 
-fn simulate_day(persons: &mut BTreeMap<&str, Person>, date: NaiveDate) {
-    info!("Date: {}", date);
+fn simulate_day(persons: &mut BTreeMap<&str, Person>, now: NaiveDate) -> f32 {
+    info!("Date: {}", now);
+    let mut sum_roi = 0.0;
     for (_, person) in persons.iter_mut() {
-        let increment = simulate_person(person);
+        let (total_roi, increment) = simulate_person(&now, person);
+        sum_roi += total_roi;
         for (skill, effective_hours_trained) in increment {
             person.target.get_mut(skill).unwrap().hours_needed -= effective_hours_trained;
             if person.target[skill].hours_needed <= 0.0 {
                 println!(
                     "{}: {} has reached target rank of {} for {}",
-                    date, person.name, person.skills[skill], skill
+                    now, person.name, person.skills[skill], skill
                 );
                 person.target.remove(skill);
             }
         }
     }
+    sum_roi
 }
 
 // Returns effective training hours for the day.
-fn simulate_person(person: &Person) -> BTreeMap<Skill, f32> {
+fn simulate_person(now: &NaiveDate, person: &Person) -> (f32, BTreeMap<Skill, f32>) {
     // Define problem variables.
     //
     // Total return on investment, aka. skill-up points -- one per skill.
@@ -351,12 +358,27 @@ fn simulate_person(person: &Person) -> BTreeMap<Skill, f32> {
     //     }
     // }
 
+    // Check for wasted time.
+    let mut wasted_time = 0.0;
+    for (seg, limit) in person.schedule.iter() {
+        let var = invested_seg.get(seg).unwrap();
+        let value = solution.get_float(var);
+        if value < *limit {
+            wasted_time += limit - value;
+        }
+    }
+    if wasted_time > 0.0 {
+        println!("{}: Wasted time: {}", now, wasted_time);
+    }
+
     // Return the results.
     let mut results = BTreeMap::new();
+    let mut total_roi = 0.0;
     for (skill, var) in roi.iter() {
         results.insert(*skill, solution.get_float(var));
+        total_roi += solution.get_float(var);
     }
-    results
+    (total_roi, results)
 }
 
 // Computes the number of effective training hours needed to reach a target rank.

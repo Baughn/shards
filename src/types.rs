@@ -7,7 +7,7 @@ pub type Segment = &'static str;
 // This is required to give deterministic results.
 const DEFAULT_PRIORITY_ORDER: &[Skill] = &["Integrity", "Dreamwalking", "Illusion", "Lore"];
 // The low offset value ensures overlap bonuses aren't ignored.
-const DEFAULT_PRIORITY_OFFSET: f32 = 0.000001;
+const DEFAULT_PRIORITY_OFFSET: f32 = 0.0;
 
 // A character is, really, just the sum of their tasks.
 // Sometimes we want to replace their components, which is done implicitly
@@ -16,6 +16,7 @@ const DEFAULT_PRIORITY_OFFSET: f32 = 0.000001;
 // The simulator runs whenever At is used, and will run to completion once the
 // task list is exhausted.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum Task {
     At {
         date: chrono::NaiveDate,
@@ -76,6 +77,7 @@ impl Person {
         // We start at 1.0, then just add the offset per-skill.
         let preference = DEFAULT_PRIORITY_ORDER
             .iter()
+            .rev()
             .enumerate()
             .map(|(i, skill)| (*skill, 1.0 + i as f32 * DEFAULT_PRIORITY_OFFSET))
             .collect();
