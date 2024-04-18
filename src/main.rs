@@ -38,8 +38,8 @@ lazy_static! {
 fn main() {
     env_logger::init();
 
-    let start = NaiveDate::from_ymd_opt(2009, 09, 01).unwrap();
-    println!("{}: Time begins", start);
+    let start = NaiveDate::from_ymd_opt(2009, 10, 17).unwrap();
+    println!("{}: Chapter 2.1", start);
     let schedule: Vec<Task> = vec![
         Task::Baseline {
             name: "Amu",
