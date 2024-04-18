@@ -7,7 +7,7 @@ pub type Segment = &'static str;
 // This is required to give deterministic results.
 const DEFAULT_PRIORITY_ORDER: &[Skill] = &["Integrity", "Dreamwalking", "Illusion", "Lore"];
 // The low offset value ensures overlap bonuses aren't ignored.
-const DEFAULT_PRIORITY_OFFSET: f32 = 0.0;
+const DEFAULT_PRIORITY_OFFSET: f32 = 0.01;
 
 // A character is, really, just the sum of their tasks.
 // Sometimes we want to replace their components, which is done implicitly

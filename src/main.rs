@@ -163,23 +163,37 @@ fn main() {
     // At the end of the schedule.
     // Run the simulator until no-one has any skill-up targets left.
     let mut sum_roi = 0.0;
+    let mut sum_wasted_time = 0.0;
     let mut days = 0;
     while persons.iter().any(|(_, person)| person.target.len() > 0) {
-        sum_roi += simulate_day(&mut persons, now);
+        let (day_roi, day_wt) = simulate_day(&mut persons, now);
+        sum_roi += day_roi;
+        sum_wasted_time += day_wt;
         days += 1;
         now = now.succ_opt().unwrap();
     }
-    println!("Total ROI: {}, ROI/day: {}", sum_roi, sum_roi / days as f32);
+    println!(
+        "Total ROI: {:0.2}, ROI/day: {:0.2}",
+        sum_roi,
+        sum_roi / days as f32
+    );
+    println!(
+        "Total Wasted Time: {:0.2} hours, Wasted Time/day: {:0.2} hours",
+        sum_wasted_time,
+        sum_wasted_time / days as f32
+    );
     info!("Simulation complete.");
 }
 
-fn simulate_day(persons: &mut BTreeMap<&str, Person>, now: NaiveDate) -> f32 {
+fn simulate_day(persons: &mut BTreeMap<&str, Person>, now: NaiveDate) -> (f32, f32) {
     info!("Date: {}", now);
     let mut sum_roi = 0.0;
+    let mut sum_wasted_time = 0.0;
     for (_, person) in persons.iter_mut() {
-        let (total_roi, increment) = simulate_person(&now, person);
-        sum_roi += total_roi;
-        for (skill, effective_hours_trained) in increment {
+        let day = simulate_person(&now, person);
+        sum_roi += day.total_roi;
+        sum_wasted_time += day.wasted_time;
+        for (skill, effective_hours_trained) in day.increment {
             person.target.get_mut(skill).unwrap().hours_needed -= effective_hours_trained;
             if person.target[skill].hours_needed <= 0.0 {
                 println!(
@@ -190,11 +204,17 @@ fn simulate_day(persons: &mut BTreeMap<&str, Person>, now: NaiveDate) -> f32 {
             }
         }
     }
-    sum_roi
+    (sum_roi, sum_wasted_time)
+}
+
+struct SimulatedDay {
+    total_roi: f32,
+    wasted_time: f32,
+    increment: BTreeMap<Skill, f32>,
 }
 
 // Returns effective training hours for the day.
-fn simulate_person(now: &NaiveDate, person: &Person) -> (f32, BTreeMap<Skill, f32>) {
+fn simulate_person(_now: &NaiveDate, person: &Person) -> SimulatedDay {
     // Define problem variables.
     //
     // Total return on investment, aka. skill-up points -- one per skill.
@@ -367,18 +387,18 @@ fn simulate_person(now: &NaiveDate, person: &Person) -> (f32, BTreeMap<Skill, f3
             wasted_time += limit - value;
         }
     }
-    if wasted_time > 0.0 {
-        println!("{}: Wasted time: {}", now, wasted_time);
-    }
-
     // Return the results.
-    let mut results = BTreeMap::new();
+    let mut increment = BTreeMap::new();
     let mut total_roi = 0.0;
     for (skill, var) in roi.iter() {
-        results.insert(*skill, solution.get_float(var));
+        increment.insert(*skill, solution.get_float(var));
         total_roi += solution.get_float(var);
     }
-    (total_roi, results)
+    SimulatedDay {
+        increment,
+        total_roi,
+        wasted_time,
+    }
 }
 
 // Computes the number of effective training hours needed to reach a target rank.
