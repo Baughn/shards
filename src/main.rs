@@ -196,11 +196,14 @@ fn simulate_day(persons: &mut BTreeMap<&str, Person>, now: NaiveDate) -> (f32, f
         for (skill, effective_hours_trained) in day.increment {
             person.target.get_mut(skill).unwrap().hours_needed -= effective_hours_trained;
             if person.target[skill].hours_needed <= 0.0 {
+                person
+                    .skills
+                    .insert(skill, person.target[skill].target_ranks);
+                person.target.remove(skill);
                 println!(
                     "{}: {} has reached target rank of {} for {}",
                     now, person.name, person.skills[skill], skill
                 );
-                person.target.remove(skill);
             }
         }
     }
