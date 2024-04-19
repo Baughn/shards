@@ -144,14 +144,15 @@ fn main() {
             Task::Target { name, target } => {
                 let person = persons.get_mut(name).unwrap();
                 let mut new_targets = btreemap! {};
-                for (skill, target_ranks) in target {
+                for (skill, target_rank) in target {
                     new_targets.insert(
                         skill,
                         Target {
-                            target_ranks,
+                            target_rank,
                             hours_needed: effective_training_hours_needed(
                                 skill,
                                 person.skills[skill],
+                                target_rank,
                             ),
                         },
                     );
@@ -198,7 +199,7 @@ fn simulate_day(persons: &mut BTreeMap<&str, Person>, now: NaiveDate) -> (f32, f
             if person.target[skill].hours_needed <= 0.0 {
                 person
                     .skills
-                    .insert(skill, person.target[skill].target_ranks);
+                    .insert(skill, person.target[skill].target_rank);
                 person.target.remove(skill);
                 println!(
                     "{}: {} has reached target rank of {} for {}",
@@ -405,13 +406,28 @@ fn simulate_person(_now: &NaiveDate, person: &Person) -> SimulatedDay {
 }
 
 // Computes the number of effective training hours needed to reach a target rank.
-// This depends on the type of skill and the current rank.
-fn effective_training_hours_needed(skill: &str, current_rank: f32) -> f32 {
+fn effective_training_hours_needed(skill: &str, current_rank: f32, target_rank: f32) -> f32 {
     const HOURS_PER_WEEK: f32 = 48.0;
     const WEEKS_PER_MONTH: f32 = 4.0;
-    let current_rank = current_rank.floor();
-    if current_rank <= 0.0 {
-        return if ATTRIBUTES.contains(skill) {
+    let increment = target_rank - current_rank;
+    // Costs increase abruptly at each rank, so we can't just use a linear formula
+    // and we can't (currently) handle a target rank that crosses an integer boundary.
+    // 1.5 to 2.0 is fine, 1.0 to 2.0 is fine, but 1.5 to 2.5 is not.
+    let base_rank = current_rank.floor();
+    let target_base_rank = target_rank.floor();
+    if target_base_rank == base_rank {
+        // Always fine.
+    } else if target_base_rank == base_rank + 1.0 && target_rank.fract() == 0.0 {
+        // Also fine.
+    } else {
+        panic!(
+            "Can't handle target rank {} from current rank {}",
+            target_rank, current_rank
+        );
+    }
+
+    let cost = if base_rank <= 0.0 {
+        if ATTRIBUTES.contains(skill) {
             3.0 * HOURS_PER_WEEK * WEEKS_PER_MONTH
         } else if ABILITIES.contains(skill) {
             3.0 * HOURS_PER_WEEK
@@ -419,9 +435,9 @@ fn effective_training_hours_needed(skill: &str, current_rank: f32) -> f32 {
             2.0 * HOURS_PER_WEEK
         } else {
             panic!("Unknown skill type: {}", skill);
-        };
+        }
     } else {
-        return if ATTRIBUTES.contains(skill) {
+        if ATTRIBUTES.contains(skill) {
             current_rank * HOURS_PER_WEEK * WEEKS_PER_MONTH
         } else if ABILITIES.contains(skill) {
             current_rank * HOURS_PER_WEEK
@@ -429,6 +445,7 @@ fn effective_training_hours_needed(skill: &str, current_rank: f32) -> f32 {
             current_rank * HOURS_PER_WEEK
         } else {
             panic!("Unknown skill type: {}", skill);
-        };
-    }
+        }
+    };
+    return cost * increment;
 }

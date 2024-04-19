@@ -103,6 +103,6 @@ pub struct Overlap {
 
 #[derive(Debug)]
 pub struct Target {
-    pub target_ranks: f32,
+    pub target_rank: f32,
     pub hours_needed: f32,
 }
